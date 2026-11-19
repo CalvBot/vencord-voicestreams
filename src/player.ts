@@ -19,7 +19,8 @@
 // Arguments: --detach <pid,pid,...> <userId>. It restarts itself so that it is no longer a child of
 // the program that started it. Environment: VOICESTREAMS_DEVICE, the playback device (part of its
 // name; empty or unknown = default), VOICESTREAMS_OWNER, the process id it exits with (Discord),
-// and VOICESTREAMS_VOLUME, 0 to 200 with 100 = as received. It prints "P <its process id>" once, so it can be stopped by id.
+// and VOICESTREAMS_VOLUME, 0 to 200 with 100 = as received (later changes come on stdin as
+// "V <volume>" lines). It prints "P <its process id>" once, so it can be stopped by id.
 // Twice a second it prints "L <peak sample value>" so the plugin can tell sound from silence,
 // or "L -1" when no audio arrived at all (no stream, or Discord stopped feeding it), and
 // "A 1" or "A 0" for whether the recorder is taking audio at all.
@@ -169,6 +170,21 @@ static class Player {
         Environment.Exit(0);
     }
 
+    // 0 to 200, 100 = as received. Starts from VOICESTREAMS_VOLUME; the plugin sends "V <volume>"
+    // lines on stdin when it changes, so the player keeps running (and keeps its place in the
+    // volume mixer and in capture tools) instead of being started again.
+    static volatile int volume = 100;
+
+    static void WatchVolume() {
+        try {
+            string line;
+            while ((line = Console.In.ReadLine()) != null) {
+                int v;
+                if (line.StartsWith("V ") && int.TryParse(line.Substring(2).Trim(), out v)) volume = Math.Max(0, Math.Min(200, v));
+            }
+        } catch (Exception) { }
+    }
+
     static bool OpenDevice(string wanted) {
         uint id = WAVE_MAPPER;
         if (wanted.Length > 0) {
@@ -264,13 +280,16 @@ static class Player {
         if (!ulong.TryParse(user, out check)) return 1;
         int owner;
         if (!int.TryParse(Environment.GetEnvironmentVariable("VOICESTREAMS_OWNER"), out owner)) return 1;
-        int volume;
-        if (!int.TryParse(Environment.GetEnvironmentVariable("VOICESTREAMS_VOLUME"), out volume)) volume = 100;
+        int startVolume;
+        if (int.TryParse(Environment.GetEnvironmentVariable("VOICESTREAMS_VOLUME"), out startVolume)) volume = Math.Max(0, Math.Min(200, startVolume));
         if (!OpenDevice(Environment.GetEnvironmentVariable("VOICESTREAMS_DEVICE") ?? "")) return 2;
 
         Thread watch = new Thread(WatchOwner);
         watch.IsBackground = true;
         watch.Start(owner);
+        Thread volumes = new Thread(WatchVolume);
+        volumes.IsBackground = true;
+        volumes.Start();
         // The plugin stops a player by this id when its person leaves
         try {
             Console.Out.WriteLine("P " + System.Diagnostics.Process.GetCurrentProcess().Id);
@@ -309,9 +328,10 @@ static class Player {
                     if (s > peak) peak = s;
                 }
                 // After the peak, so the plugin still sees sound at volume 0
-                if (volume != 100) {
+                int gain = volume;
+                if (gain != 100) {
                     for (int i = 0; i + 1 < (int)size; i += 2) {
-                        int s = (short)(pcm[i] | (pcm[i + 1] << 8)) * volume / 100;
+                        int s = (short)(pcm[i] | (pcm[i + 1] << 8)) * gain / 100;
                         s = Math.Max(-32768, Math.Min(32767, s));
                         pcm[i] = (byte)s;
                         pcm[i + 1] = (byte)(s >> 8);

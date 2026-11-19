@@ -31,7 +31,9 @@ export interface Person {
 interface Running {
     /** Folder and exe name it was started as (appKey) */
     app: string;
+    /** The volume it was last told, and where to tell it a new one */
     volume: number;
+    input: NodeJS.WritableStream;
     /** Renderer pids and output device it was started with */
     args: string;
     /** The loudest sample in each of the player's last few half-second reports */
@@ -221,14 +223,16 @@ async function start(p: Person, pids: string, device: string) {
     // is no longer a child of Discord. Programs that capture an app together with everything it
     // started (lifelog, OBS) would otherwise pick every person up a second time as part of Discord.
     // The copy keeps the output pipes, exits by itself when Discord is gone, and is stopped by its
-    // process id when its person leaves.
+    // process id when its person leaves. It also keeps the input pipe, which takes volume changes.
     const proc = spawn(exe, ["--detach", pids, p.id], {
         cwd: DIR,
         windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, VOICESTREAMS_DEVICE: device, VOICESTREAMS_OWNER: String(process.pid), VOICESTREAMS_VOLUME: String(p.volume) },
     });
-    const r: Running = { app: appKey(p), volume: p.volume, args: `${pids}|${device}`, peaks: [], recorderMoving: null, pid: null, stopped: false };
+    // A player that has exited closes the pipe; that is handled by "close" below
+    proc.stdin!.on("error", () => { });
+    const r: Running = { app: appKey(p), volume: p.volume, input: proc.stdin!, args: `${pids}|${device}`, peaks: [], recorderMoving: null, pid: null, stopped: false };
     running.set(p.id, r);
     proc.stdout!.on("data", d => {
         const pid = /^P (\d+)/m.exec(String(d));
@@ -274,7 +278,14 @@ export async function update(e: IpcMainInvokeEvent, device: string, inCall: Pers
     for (const [id, r] of [...running]) {
         const p = want.get(id);
         // Left the call, or something the player was started with changed
-        if (!p || r.args !== args || r.app !== appKey(p) || r.volume !== p.volume) stop(id);
+        if (!p || r.args !== args || r.app !== appKey(p)) {
+            stop(id);
+        } else if (r.volume !== p.volume) {
+            // Told while it runs: starting it again would drop it from the volume mixer and
+            // capture tools, and Discord would play the person meanwhile
+            r.volume = p.volume;
+            r.input.write(`V ${p.volume}\n`);
+        }
     }
     const now = Date.now();
     for (const p of want.values()) {
