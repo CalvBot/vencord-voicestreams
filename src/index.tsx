@@ -322,6 +322,10 @@ export default definePlugin({
         CLIPS_INIT(e: { sourceId?: string; }) {
             sourceIsOurs = e.sourceId != null && e.sourceId === ourSourceId;
         },
+        // Someone's volume was changed: pass it to their app now, not at the next tick
+        AUDIO_SET_LOCAL_VOLUME() {
+            if (timer) setTimeout(tick, 0);
+        },
     },
 
     start() {

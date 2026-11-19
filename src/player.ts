@@ -19,8 +19,8 @@
 // Arguments: --detach <pid,pid,...> <userId>. It restarts itself so that it is no longer a child of
 // the program that started it. Environment: VOICESTREAMS_DEVICE, the playback device (part of its
 // name; empty or unknown = default), VOICESTREAMS_OWNER, the process id it exits with (Discord),
-// and VOICESTREAMS_VOLUME, 0 to 200 with 100 = as received (later changes come on stdin as
-// "V <volume>" lines). It prints "P <its process id>" once, so it can be stopped by id.
+// and VOICESTREAMS_VOLUME, 0 to 200 with 100 = as received (later changes are read from the file
+// named by VOICESTREAMS_VOLUME_FILE). It prints "P <its process id>" once, so it can be stopped by id.
 // Twice a second it prints "L <peak sample value>" so the plugin can tell sound from silence,
 // or "L -1" when no audio arrived at all (no stream, or Discord stopped feeding it), and
 // "A 1" or "A 0" for whether the recorder is taking audio at all.
@@ -170,19 +170,26 @@ static class Player {
         Environment.Exit(0);
     }
 
-    // 0 to 200, 100 = as received. Starts from VOICESTREAMS_VOLUME; the plugin sends "V <volume>"
-    // lines on stdin when it changes, so the player keeps running (and keeps its place in the
-    // volume mixer and in capture tools) instead of being started again.
+    // 0 to 200, 100 = as received. Starts from VOICESTREAMS_VOLUME; when it changes the plugin
+    // writes the new number to a file, so the player keeps running (and keeps its place in the
+    // volume mixer and in capture tools) instead of being started again. A file, not stdin: the
+    // plugin's end of the pipes closes for writing once the first copy has exited (see Detach).
     static volatile int volume = 100;
 
-    static void WatchVolume() {
-        try {
-            string line;
-            while ((line = Console.In.ReadLine()) != null) {
+    static void WatchVolume(object path) {
+        DateTime seen = DateTime.MinValue;
+        while (true) {
+            try {
+                DateTime changed = System.IO.File.GetLastWriteTimeUtc((string)path);
                 int v;
-                if (line.StartsWith("V ") && int.TryParse(line.Substring(2).Trim(), out v)) volume = Math.Max(0, Math.Min(200, v));
-            }
-        } catch (Exception) { }
+                // A file that doesn't exist has a date long ago, which never counts as newer
+                if (changed > seen && changed.Year > 2000 && int.TryParse(System.IO.File.ReadAllText((string)path).Trim(), out v)) {
+                    volume = Math.Max(0, Math.Min(200, v));
+                    seen = changed;
+                }
+            } catch (Exception) { }
+            Thread.Sleep(150);
+        }
     }
 
     static bool OpenDevice(string wanted) {
@@ -287,9 +294,12 @@ static class Player {
         Thread watch = new Thread(WatchOwner);
         watch.IsBackground = true;
         watch.Start(owner);
-        Thread volumes = new Thread(WatchVolume);
-        volumes.IsBackground = true;
-        volumes.Start();
+        string volumeFile = Environment.GetEnvironmentVariable("VOICESTREAMS_VOLUME_FILE");
+        if (!string.IsNullOrEmpty(volumeFile)) {
+            Thread volumes = new Thread(WatchVolume);
+            volumes.IsBackground = true;
+            volumes.Start(volumeFile);
+        }
         // The plugin stops a player by this id when its person leaves
         try {
             Console.Out.WriteLine("P " + System.Diagnostics.Process.GetCurrentProcess().Id);
