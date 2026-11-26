@@ -7,13 +7,15 @@ they get their own entry in the volume mixer and can be recorded separately.
 
 ## Setup
 
-1. Install [Vencord](https://vencord.dev/download/) if you don't have it.
-2. Quit Discord fully, then extract `VoiceStreams.zip` from the
-   [latest release](https://github.com/CalvBot/vencord-voicestreams/releases/latest) into
-   `%APPDATA%\Vencord\dist`, replacing the files there.
-3. Enable **VoiceStreams** in Vencord's plugin settings.
+1. Install [Vencord](https://vencord.dev/download/) and open Discord once.
+2. Download and run the
+   [Vencord Plugin Installer](https://github.com/CalvBot/vencord-plugin-installer/releases/latest),
+   tick **VoiceStreams** and click Install.
 
-Vencord's installer (Repair) puts plain Vencord back.
+It builds Vencord with the plugin on your own PC and switches it on. Run it again to update.
+
+To build it yourself, copy `src` into a Vencord source checkout as `src/userplugins/voiceStreams` and
+build Vencord.
 
 People with "Allow Clips" off run from `%LOCALAPPDATA%\VoiceStreams\clips-off\`, everyone else from
 `clips-on\`, so your recorder can skip them.
